@@ -25,7 +25,7 @@ class MobileManipulator:
         - pos_joint_2: joint 2 [x, y, z] in global coordinate
         - pos_joint_3: joint 3 [x, y, z] in global coordinate
         """
-        x = state[:6]
+        x = state[:6] # 通过切片操作，将state[0]到state[5]的值存储到x中
         q = state[6:]
         pos_endpoint, pos_joint_2, pos_joint_3 = self.manipulator.forward_tranformation(q)
         try:

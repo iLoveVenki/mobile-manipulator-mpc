@@ -151,7 +151,7 @@ topic-tools==1.16.0
 tqdm==4.66.1
 trimesh==4.0.5
 typing_extensions==4.8.0
-urdfenvs @ file:///home/pengzhi/courses_delft/q2-y2/RO47005/gym_envs_urdf
+# urdfenvs @ file:///home/pengzhi/courses_delft/q2-y2/RO47005/gym_envs_urdf # 模型安装基于此链接：https://github.com/maxspahn/gym_envs_urdf
 xacro==1.14.16
 xxhash==3.4.1
 yourdfpy==0.0.52

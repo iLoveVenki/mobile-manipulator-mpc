@@ -4,7 +4,7 @@ import numpy as np
 
 class ManipulatorPanda3DoF:
     def __init__(self, dt):
-        self.dt = dt
+        self.dt = dt # dt为迭代所用的差分时间
         # self.model_params = whatever, not used in this demo
 
     def forward_tranformation(self, q):
@@ -32,6 +32,7 @@ class ManipulatorPanda3DoF:
             ca.horzcat(-ca.sin(q1), ca.cos(q1), 0, a2*ca.cos(q1) - a3*ca.sin(q1)),
             ca.horzcat(0, 0, 0, 1)
         )
+        # 计算得到的旋转姿态矩阵并没有使用
         R_base_to_joint2 = T_joint2_to_base[0:3, 0:3].T # the rotation is inversed, equivalent to transpose
         x_joint_2 = T_joint2_to_base[0:3, 3].T # row vector
         
@@ -74,6 +75,7 @@ class ManipulatorPanda3DoF:
         R_base_to_endpoint = T_endpoint_to_base[0:3, 0:3].T
         x_endpoint = T_endpoint_to_base[0:3, 3].T
 
+        #* 返回机械臂末端点x_endpoint和关节原点x_joint_i等在基坐标系下的描述位置向量
         return x_endpoint, x_joint_2, x_joint_3   
 
     def inverse_transformation(self, q_initial_guess, x_target):
@@ -106,10 +108,13 @@ class ManipulatorPanda3DoF:
             # the translation from endpoint to base, which is the position of endpoint in the base frame
             x = a2*ca.sin(q1) - a3*ca.sin(q1)*ca.sin(q2) - a3*ca.cos(q1)*ca.cos(q2) + a3*ca.cos(q1) + a5*(ca.sin(q1)*ca.cos(q2) - ca.sin(q2)*ca.cos(q1)) - a6*(-ca.sin(q1)*ca.sin(q2) - ca.cos(q1)*ca.cos(q2))*ca.cos(q3) + a6*(ca.sin(q1)*ca.cos(q2) - ca.sin(q2)*ca.cos(q1))*ca.sin(q3) - a7*((-ca.sin(q1)*ca.sin(q2) - ca.cos(q1)*ca.cos(q2))*ca.sin(q3) + (ca.sin(q1)*ca.cos(q2) - ca.sin(q2)*ca.cos(q1))*ca.cos(q3))
             z = a2*ca.cos(q1) + a3*ca.sin(q1)*ca.cos(q2) - a3*ca.sin(q1) - a3*ca.sin(q2)*ca.cos(q1) + a5*(ca.sin(q1)*ca.sin(q2) + ca.cos(q1)*ca.cos(q2)) + a6*(ca.sin(q1)*ca.sin(q2) + ca.cos(q1)*ca.cos(q2))*ca.sin(q3) - a6*(ca.sin(q1)*ca.cos(q2) - ca.sin(q2)*ca.cos(q1))*ca.cos(q3) - a7*((ca.sin(q1)*ca.sin(q2) + ca.cos(q1)*ca.cos(q2))*ca.cos(q3) + (ca.sin(q1)*ca.cos(q2) - ca.sin(q2)*ca.cos(q1))*ca.sin(q3))
+            # 上述x和z的符号计算与正运动学计算函数（第64行）中的公式一致
 
             cost = (x - x_target[0])**2 + (z - x_target[2])**2
 
+            # 定义优化问题的约束条件为(q1, q2, q3)组成的关节向量
             ineq_constraints = ca.vertcat(q1, q2, q3)
+            # 设置IPOPT算法的参数，如最大迭代次数、输出级别等
             opts_setting = {
                     'ipopt.max_iter': 2000,
                     'ipopt.print_level': 0, # 5 for details
@@ -117,19 +122,23 @@ class ManipulatorPanda3DoF:
                     'ipopt.acceptable_tol': 1e-8,
                     'ipopt.acceptable_obj_change_tol': 1e-6
             }
+            # 定义优化问题，包括变量、目标函数和约束条件
             nlp = {'x': ca.vertcat(q1, q2, q3), 'f': cost, 'g': ineq_constraints}
             solver = ca.nlpsol('solver', 'ipopt', nlp, opts_setting)
             try:
+                # lbg和ubg分别为约束函数即ineq_constraints的上下界，这里为关节转交范围
                 result = solver(x0=q_initial_guess, lbg=[-ca.pi/2, -ca.pi*3/4, 0], ubg=[ca.pi/2, 0, ca.pi*3/2])
             except:
                 raise ValueError(f"No solution in joint space found for given target {x_target} in cartesian space")
 
         elif x_target.shape[0] == 4:
+            #& x_target.shape[0]的值越大，表明所约束的位姿自由度越高
             pass
         elif x_target.shape[0] == 6:
             pass
         else: raise ValueError("Wrong target ")
 
+        # squeeze()函数可以删除数组形状中的单维度条目，即把shape中为1的维度去掉
         return np.asarray(result['x']).squeeze() # shape = (3,1), type = ca.DM -> (3,) np.array
 
     def _get_xdot(self, q, q_dot):
@@ -184,13 +193,16 @@ class ManipulatorPanda3DoF:
         # print(dx1)
         # print(dx2)
         # print(dx3)
-        return ca.vertcat(dx1, dx2, dx3)
+        return ca.vertcat(dx1, dx2, dx3) # 返回机械臂末端xyz坐标的微分导数
 
     def f_kinematics(self, q, q_dot):
+        """将关节角度更新为下一迭代时间步对应值，即q = q + q_dot * delta_t
+        """
         q += q_dot * self.dt
         return q
 
     def f_kinematics_with_jacobian(self, x, q, q_dot):
+        """返回机械臂末端在下一迭代时间步对应的位置和关节角(x_next, q_next)"""
         # TODO: assert x.type == u.type == casadi variable
         # x1 = x[0]
         # return ca.sin(x1)+ca.cos(q_dot)+q

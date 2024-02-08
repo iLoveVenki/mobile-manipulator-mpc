@@ -7,10 +7,10 @@ class MPCBase:
     def __init__(self,
         robot, 
         obstacle_list,
-        N = 10, 
-        Q = np.diag([5., 5., 0.0, 0, 0, 1.]), # x y psi dx dy dpsi
+        N = 10, # N为预测时阈的宽度
+        Q = np.diag([5., 5., 0.0, 0, 0, 1.]), # x y psi dx dy dpsi 成本函数中的状态误差权重
         P = np.diag([5., 5., 0.0, 0, 0, 1.]),  # [2., 2., 0., 0, 0, 1.]
-        R = np.diag([1., 1.]), 
+        R = np.diag([1., 1.]), # 成本函数中的控制误差权重
         M = np.diag([1e5]), # 1e3, th=0.0, r=0.4
         ulim=np.array([[-2, -ca.pi],[2, ca.pi]]), # dv, dw
         xlim=np.array([[-100, -100, -2, -2, -ca.pi],[100, 100, 2, 2, ca.pi]]) # x, y, _, dx, dy, dpsi
@@ -22,8 +22,8 @@ class MPCBase:
         self.M_value = M
         self.dt = robot.dt
         self.N = N
-        self.ulim = ulim
-        self.xlim = xlim
+        self.ulim = ulim # 基座的速度和角速度范围
+        self.xlim = xlim # 运动范围
         self.f_dynamics = robot.f_kinematics #member function
         self.base_radius = robot.base_radius #member function
         self.obstacle_list = obstacle_list
@@ -47,10 +47,11 @@ class MPCBase:
         # return (x[0]-obstacle.x)**2 + (x[1]-obstacle.x)**2 - obstacle.radius - self.base_radius() 
 
     def obsAvoid(self, obstacle_list, x):
-        g = []
+        g = [] # 安全成本，该数值应该小于0，负数的值越大，则越加安全
         threshold = 0.0 # 0.5 is safe, -0.1 is elegant
         for obs in obstacle_list:
             g.append((obs.radius + self.base_radius()) - ca.sqrt((x[0]-obs.x)**2 + (x[1]-obs.y)**2) + threshold) # should be <= 0
+        # 障碍物半径+基座半径+安全距离 - 障碍物中心到基座中心的距离应该小于0
         return g # all elements should be <= 0
     
     def angleDiff(self, a, b):
@@ -94,6 +95,7 @@ class MPCBase:
         return angle_diff
 
     def setWeight(self, Q=None, R=None, P=None, M=None):
+        """该方法接受 4 个可选参数（Q、R、P、M），分别对应不同的权重值。"""
         if Q is not None: 
             self.Q_value = Q
             
@@ -121,10 +123,12 @@ class MPCBase:
         if we use Nx2, then matrix mult = X @ p; and elementwise mult = X * p, 
         of we use 2xN, then matrix mult = (X.T @ p).T; and elementwise mult = (X.T * p).T
         '''
+        # opti.variable()函数的主要目的是封装对 _variable 方法的调用，并在调用期间捕获异常信息以及调用堆栈信息。这样做可能有助于调试和记录有关方法调用的详细信息。
         self.X = self.opti.variable(self.N+1, 6)    # states
         self.U = self.opti.variable(self.N, 2)      # inputs
-        self.s = self.opti.variable(self.N+1, 1)    # slack variable
+        self.s = self.opti.variable(self.N+1, 1)    # slack variable（边缘变量），用于表示优化问题的约束。
 
+        # 初始化机器人系统的初始状态、参考状态和参考控制
         self.X_init = self.opti.parameter(1, 6)
         self.X_ref = self.opti.parameter(self.N+1, 6)
         self.U_ref = self.opti.parameter(self.N, 2)
@@ -132,33 +136,40 @@ class MPCBase:
         self.X_guess = None
         self.U_guess = None
 
-        self.Q = self.opti.parameter(6,6)
-        self.R = self.opti.parameter(2,2)
-        self.P = self.opti.parameter(6,6)
-        self.M = self.opti.parameter(1,1)
+        # 在优化问题中，我们可以使用这些权重矩阵来调整优化目标的权重，从而获得更优的解。
+        self.Q = self.opti.parameter(6,6) # 成本函数中的状态误差分量权重
+        self.R = self.opti.parameter(2,2) #& 成本函数中的控制误差分量权重
+        self.P = self.opti.parameter(6,6) #* 成本函数中的终止状态误差分量权重
+        self.M = self.opti.parameter(1,1) # 成本函数中的避碰分量权重
 
         self.setWeight()
 
         cost = 0
         # Define constraints and cost, casadi requires x[k, :] instead of x[k] (which will be shape(1,1)) when calling row vector
-        for k in range(self.N):
-            self.opti.subject_to(self.X[k+1, :] == self.f_dynamics(self.X[k, :], self.U[k, :]))
+        for k in range(self.N): #! range()函数生成的结果是左闭右开，遍历的最后一个值为N-1，不包括N
+            self.opti.subject_to(self.X[k+1, :] == self.f_dynamics(self.X[k, :], self.U[k, :])) # 第 k+1 步的状态预测
+            # 状态误差是第 k 步的实际状态 self.X[k, :] 与参考状态 self.X_ref[k, :] 的差值。
             state_error = ca.horzcat(
                 self.X[k, :2] - self.X_ref[k, :2],
                 self.angleDiff(self.X[k, 2], self.X_ref[k, 2]),
                 self.X[k, 3:] - self.X_ref[k, 3:]
             )
+            # 控制误差是第 k 步的实际控制输入 self.U[k, :] 与参考控制输入 self.U_ref[k, :] 的差值。
             control_error = self.U[k, :] - self.U_ref[k, :]
             cost += ca.mtimes([state_error, self.Q, state_error.T]) \
                                 + ca.mtimes([control_error, self.R, control_error.T])
+            # 设置控制输入self.U[k, :]的上、下界
             self.opti.subject_to(self.opti.bounded(self.ulim[0].reshape(1,2), self.U[k, :], self.ulim[1].reshape(1,2))) # control input constraint
             self.opti.subject_to(self.opti.bounded(self.xlim[0, 0:2].reshape(1,2), self.X[k, 0:2], self.xlim[1, 0:2].reshape(1,2))) # state constraint
+            # 将self.xlim从第3个元素往后的数组，通过reshape(1,-1)重整成1行，自动确定列数大小的数组
             self.opti.subject_to(self.opti.bounded(self.xlim[0, 2:].reshape(1,-1), self.X[k, 3:], self.xlim[1, 2:].reshape(1,-1))) # state constraint
+            # 添加障碍物 avoidance 约束。它首先定义了一个辅助变量 self.s[k]，用于存储第 k 步的 avoidance 成本
             for g in self.obsAvoid(self.obstacle_list, self.X[k,:]):
                 self.opti.subject_to(g <= self.s[k])
             # constraint_error = self.slackObsAvoid(self.obstacle_list, self.X[k, :])
             cost += ca.mtimes([self.s[k], self.M, self.s[k]])
             
+        # 计算控制量的目标值和实际值之间的差异，然后将它们与速度和角度的误差进行拼接。
         terminal_state_error = ca.horzcat(
                 self.X[self.N, :2] - self.X_ref[self.N, :2],
                 self.angleDiff(self.X[self.N, 2], self.X_ref[self.N, 2]),
@@ -175,7 +186,7 @@ class MPCBase:
         # terminal_constraint_error = self.slackObsAvoid(self.obstacle_list, self.X[self.N, :])
         cost += ca.mtimes([self.s[self.N], self.M, self.s[self.N]])
         
-        self.opti.minimize(cost)
+        self.opti.minimize(cost) # 调用优化器
 
         
         
@@ -201,7 +212,9 @@ class MPCBase:
         self.opti.set_initial(self.U, self.U_guess)
         self.opti.set_initial(self.s, np.zeros((self.N+1, 1)))
 
+        # 将参考轨迹（traj_ref）设置到优化器中的参考状态量变量（self.X_ref）中
         self.opti.set_value(self.X_ref, traj_ref)
+        # 将参考控制量（u_ref）设置到优化器中的参考控制量变量（self.U_ref）中
         self.opti.set_value(self.U_ref, u_ref)
         
         self.opti.set_value(self.X_init, x_init)
